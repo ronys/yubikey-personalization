@@ -47,15 +47,6 @@
  */
 #define WAIT_FOR_WRITE_FLAG	600
 
-int yk_wait_for_key_status(YK_KEY *yk, uint8_t slot, unsigned int flags,
-			   unsigned int max_time_ms,
-			   bool logic_and, unsigned char mask,
-			   unsigned char *last_data);
-
-int yk_read_response_from_key(YK_KEY *yk, uint8_t slot, unsigned int flags,
-			      void *buf, unsigned int bufsize, unsigned int expect_bytes,
-			      unsigned int *bytes_read);
-
 int yk_init(void)
 {
 	return _ykusb_start();
@@ -145,7 +136,6 @@ int yk_get_status(YK_KEY *k, YK_STATUS *status)
 int yk_get_serial(YK_KEY *yk, uint8_t slot, unsigned int flags, unsigned int *serial)
 {
 	unsigned char buf[FEATURE_RPT_SIZE * 2];
-	int yk_cmd;
 	unsigned int response_len = 0;
 	unsigned int expect_bytes = 0;
 
@@ -246,11 +236,12 @@ int yk_write_config(YK_KEY *yk, YK_CONFIG *cfg, int confnum,
 	if(!yk_write_command(yk, cfg, command, acc_code)) {
 		return 0;
 	}
+	return 1;
 }
 
-int yk_write_ndef(YK_KEY *yk, YKNDEF *ndef)
+int yk_write_ndef(YK_KEY *yk, YK_NDEF *ndef)
 {
-	unsigned char buf[sizeof(YKNDEF)];
+	unsigned char buf[sizeof(YK_NDEF)];
 	YK_STATUS stat;
 	int seq;
 
@@ -264,7 +255,7 @@ int yk_write_ndef(YK_KEY *yk, YKNDEF *ndef)
 	/* Insert config block in buffer */
 
 	memset(buf, 0, sizeof(buf));
-	memcpy(buf, ndef, sizeof(YKNDEF));
+	memcpy(buf, ndef, sizeof(YK_NDEF));
 
 	/* Write to Yubikey */
 	if (!yk_write_to_key(yk, SLOT_NDEF, buf, sizeof(buf)))
@@ -286,8 +277,48 @@ int yk_write_ndef(YK_KEY *yk, YKNDEF *ndef)
 	return stat.pgmSeq != seq;
 }
 
+/*
+ * This function is for doing HMAC-SHA1 or Yubico challenge-response with a key.
+ */
+int yk_challenge_response(YK_KEY *yk, uint8_t yk_cmd, int may_block,
+		unsigned int challenge_len, const unsigned char *challenge,
+		unsigned int response_len, unsigned char *response)
+{
+	unsigned int flags = 0;
+	unsigned int bytes_read = 0;
+	unsigned int expect_bytes = 0;
 
-int * const _yk_errno_location(void)
+	switch(yk_cmd) {
+	case SLOT_CHAL_HMAC1:
+	case SLOT_CHAL_HMAC2:
+		expect_bytes = 20;
+		break;
+	case SLOT_CHAL_OTP1:
+	case SLOT_CHAL_OTP2:
+		expect_bytes = 16;
+		break;
+	default:
+		yk_errno = YK_EINVALIDCMD;
+		return 0;
+	}
+
+	if (may_block)
+		flags |= YK_FLAG_MAYBLOCK;
+
+	if (! yk_write_to_key(yk, yk_cmd, challenge, challenge_len)) {
+		return 0;
+	}
+
+	if (! yk_read_response_from_key(yk, yk_cmd, flags,
+				response, response_len,
+				expect_bytes,
+				&bytes_read)) {
+		return 0;
+	}
+	return 1;
+}
+
+int * _yk_errno_location(void)
 {
 	static int tsd_init = 0;
 	static int nothread_errno = 0;
@@ -328,7 +359,8 @@ static const char *errtext[] = {
 	"no status structure given",
 	"not yet implemented",
 	"checksum mismatch",
-	"operation would block"
+	"operation would block",
+	"invalid command for operation"
 };
 const char *yk_strerror(int errnum)
 {
@@ -336,7 +368,7 @@ const char *yk_strerror(int errnum)
 		return errtext[errnum];
 	return NULL;
 }
-const char *yk_usb_strerror()
+const char *yk_usb_strerror(void)
 {
 	return _ykusb_strerror();
 }
@@ -384,10 +416,9 @@ int yk_wait_for_key_status(YK_KEY *yk, uint8_t slot, unsigned int flags,
 			   unsigned char *last_data)
 {
 	unsigned char data[FEATURE_RPT_SIZE];
-	unsigned int bytes_read;
 
-	int sleepval = 10;
-	int slept_time = 0;
+	unsigned int sleepval = 10;
+	unsigned int slept_time = 0;
 	int blocking = 0;
 
 	/* Non-zero slot breaks on Windows (libusb-1.0.8-win32), while working fine
@@ -541,8 +572,6 @@ int yk_read_response_from_key(YK_KEY *yk, uint8_t slot, unsigned int flags,
  * Send something to the YubiKey. The command, as well as the slot, is
  * given in the 'slot' parameter (e.g. SLOT_CHAL_HMAC2 to send a HMAC-SHA1
  * challenge to slot 2).
- *
- * The slot parameter is here for future purposes only.
  */
 int yk_write_to_key(YK_KEY *yk, uint8_t slot, const void *buf, int bufcount)
 {

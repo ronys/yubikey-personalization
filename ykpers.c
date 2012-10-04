@@ -60,7 +60,7 @@ static const YK_CONFIG default_config1 = {
 	0,			/* extFlags */
 	TKTFLAG_APPEND_CR,	/* tktFlags */
 	0,			/* cfgFlags */
-	0,			/* ctrOffs */
+	{0},			/* ctrOffs */
 	0			/* crc */
 };
 
@@ -74,12 +74,12 @@ static const YK_CONFIG default_config2 = {
 	TKTFLAG_APPEND_CR,	/* tktFlags */
 	/* cfgFlags */
 	CFGFLAG_STATIC_TICKET | CFGFLAG_STRONG_PW1 | CFGFLAG_STRONG_PW2 | CFGFLAG_MAN_UPDATE,
-	0,			/* ctrOffs */
+	{0},			/* ctrOffs */
 	0			/* crc */
 };
 
 /* From nfcforum-ts-rtd-uri-1.0.pdf */
-static char *ndef_identifiers[] = {
+static const char *ndef_identifiers[] = {
 	"http://www.",
 	"https://www.",
 	"http://",
@@ -221,10 +221,8 @@ int ykp_configure_for(YKP_CONFIG *cfg, int confnum, YK_STATUS *st)
 /* Return number of bytes of key data for this configuration.
  * 20 bytes is 160 bits, 16 bytes is 128.
  */
-int _get_supported_key_length(const YKP_CONFIG *cfg)
+static int _get_supported_key_length(const YKP_CONFIG *cfg)
 {
-	bool key_bits_in_uid = false;
-
 	/* OATH-HOTP and HMAC-SHA1 challenge response support 20 byte (160 bits)
 	 * keys, holding the last four bytes in the uid field.
 	 */
@@ -265,7 +263,7 @@ int ykp_AES_key_from_hex(YKP_CONFIG *cfg, const char *hexkey) {
 */
 int ykp_HMAC_key_from_hex(YKP_CONFIG *cfg, const char *hexkey) {
 	char aesbin[256];
-	int i;
+	size_t i;
 
 	/* Make sure that the hexkey is exactly 40 characters */
 	if (strlen(hexkey) != 40) {
@@ -295,13 +293,13 @@ int ykp_AES_key_from_passphrase(YKP_CONFIG *cfg, const char *passphrase,
 				const char *salt)
 {
 	if (cfg) {
-		char *random_places[] = {
+		const char *random_places[] = {
 			"/dev/srandom",
 			"/dev/urandom",
 			"/dev/random",
 			0
 		};
-		char **random_place;
+		const char **random_place;
 		uint8_t _salt[8];
 		size_t _salt_len = 0;
 		unsigned char buf[sizeof(cfg->ykcore_config.key) + 4];
@@ -373,53 +371,84 @@ int ykp_AES_key_from_passphrase(YKP_CONFIG *cfg, const char *passphrase,
 	return 0;
 }
 
-/* Fill in the data and len parts of the YKNDEF struct based on supplied uri. */
-int ykp_construct_ndef_uri(YKNDEF *ndef, const char *uri)
+YK_NDEF *ykp_alloc_ndef(void)
+{
+	YK_NDEF *ndef = malloc(sizeof(YK_NDEF));
+	if(ndef) {
+		memset(ndef, 0, sizeof(YK_NDEF));
+		return ndef;
+	}
+	return 0;
+}
+
+int ykp_free_ndef(YK_NDEF *ndef)
+{
+	if(ndef)
+	{
+		free(ndef);
+		return 1;
+	}
+	return 0;
+}
+
+/* Fill in the data and len parts of the YK_NDEF struct based on supplied uri. */
+int ykp_construct_ndef_uri(YK_NDEF *ndef, const char *uri)
 {
 	int num_identifiers = sizeof(ndef_identifiers) / sizeof(char*);
-	int index = 0;
-	for(; index < num_identifiers; index++) {
-		size_t len = strlen(ndef_identifiers[index]);
-		if(strncmp(uri, ndef_identifiers[index], len) == 0) {
+	size_t data_length;
+	int indx = 0;
+	for(; indx < num_identifiers; indx++) {
+		size_t len = strlen(ndef_identifiers[indx]);
+		if(strncmp(uri, ndef_identifiers[indx], len) == 0) {
 			uri += len;
 			break;
 		}
 	}
-	size_t data_length = strlen(uri);
+	data_length = strlen(uri);
 	if(data_length + 1 > NDEF_DATA_SIZE) {
 		ykp_errno = YKP_EINVAL;
-		return 1;
+		return 0;
 	}
-	if(index > num_identifiers) {
+	if(indx > num_identifiers) {
 		ndef->data[0] = 0;
 	} else {
-		ndef->data[0] = index + 1;
+		ndef->data[0] = indx + 1;
 	}
 	memcpy(ndef->data + 1, uri, data_length);
 	ndef->len = data_length + 1;
 	ndef->type = 'U';
-	return 0;
+	return 1;
 }
 
-/* Fill in the data and len parts of the YKNDEF struct based on supplied text. */
-int ykp_construct_ndef_text(YKNDEF *ndef, const char *text, const char *lang, bool isutf16)
+/* Fill in the data and len parts of the YK_NDEF struct based on supplied text. */
+int ykp_construct_ndef_text(YK_NDEF *ndef, const char *text, const char *lang, bool isutf16)
 {
 	size_t data_length = strlen(text);
 	size_t lang_length = strlen(lang);
-	char status = lang_length;
+	unsigned char status = lang_length;
 	if(isutf16) {
 		status &= 0x80;
 	}
 	if((data_length + lang_length + 1) > NDEF_DATA_SIZE) {
 		ykp_errno = YKP_EINVAL;
-		return 1;
+		return 0;
 	}
 	ndef->data[0] = status;
 	memcpy(ndef->data + 1, lang, lang_length);
 	memcpy(ndef->data + lang_length + 1, text, data_length);
 	ndef->len = data_length + lang_length + 1;
 	ndef->type = 'T';
-	return 0;
+	return 1;
+}
+
+int ykp_set_ndef_access_code(YK_NDEF *ndef, unsigned char *access_code)
+{
+	if(ndef)
+	{
+		memcpy(ndef->curAccCode, access_code, ACC_CODE_SIZE);
+		return 0;
+	}
+	return 1;
 }
 
 static bool vcheck_all(const YKP_CONFIG *cfg)
@@ -807,22 +836,22 @@ int ykp_write_config(const YKP_CONFIG *cfg,
 			if ((cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX1) == CFGFLAG_OATH_FIXED_MODHEX1 ||
 			    (cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX2) == CFGFLAG_OATH_FIXED_MODHEX2 ||
 			    (cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX) == CFGFLAG_OATH_FIXED_MODHEX) {
-				yubikey_modhex_encode(buffer, (char *)cfg->ykcore_config.fixed, 1);
+				yubikey_modhex_encode(buffer, (const char *)cfg->ykcore_config.fixed, 1);
 			} else {
-				yubikey_hex_encode(buffer, (char *)cfg->ykcore_config.fixed, 1);
+				yubikey_hex_encode(buffer, (const char *)cfg->ykcore_config.fixed, 1);
 			}
 			/* Second byte (token type) */
 			if ((cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX2) == CFGFLAG_OATH_FIXED_MODHEX2 ||
 			    (cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX) == CFGFLAG_OATH_FIXED_MODHEX) {
-				yubikey_modhex_encode(buffer + 2, (char *)cfg->ykcore_config.fixed + 1, 1);
+				yubikey_modhex_encode(buffer + 2, (const char *)cfg->ykcore_config.fixed + 1, 1);
 			} else {
-				yubikey_hex_encode(buffer + 2, (char *)cfg->ykcore_config.fixed + 1, 1);
+				yubikey_hex_encode(buffer + 2, (const char *)cfg->ykcore_config.fixed + 1, 1);
 			}
 			/* bytes 3-12 - MUI */
 			if ((cfg->ykcore_config.cfgFlags & CFGFLAG_OATH_FIXED_MODHEX) == CFGFLAG_OATH_FIXED_MODHEX) {
-				yubikey_modhex_encode(buffer + 4, (char *)cfg->ykcore_config.fixed + 2, 8);
+				yubikey_modhex_encode(buffer + 4, (const char *)cfg->ykcore_config.fixed + 2, 8);
 			} else {
-				yubikey_hex_encode(buffer + 4, (char *)cfg->ykcore_config.fixed + 2, 8);
+				yubikey_hex_encode(buffer + 4, (const char *)cfg->ykcore_config.fixed + 2, 8);
 			}
 			buffer[12] = 0;
 			writer(buffer, strlen(buffer), userdata);
@@ -835,7 +864,7 @@ int ykp_write_config(const YKP_CONFIG *cfg,
 			writer(str_modhex_prefix,
 			       strlen(str_modhex_prefix),
 			       userdata);
-			yubikey_modhex_encode(buffer, (char *)cfg->ykcore_config.fixed, cfg->ykcore_config.fixedSize);
+			yubikey_modhex_encode(buffer, (const char *)cfg->ykcore_config.fixed, cfg->ykcore_config.fixedSize);
 			writer(buffer, strlen(buffer), userdata);
 			writer("\n", 1, userdata);
 		}
@@ -851,7 +880,7 @@ int ykp_write_config(const YKP_CONFIG *cfg,
 			writer(str_hex_prefix,
 			       strlen(str_hex_prefix),
 			       userdata);
-			yubikey_hex_encode(buffer, (char *)cfg->ykcore_config.uid, UID_SIZE);
+			yubikey_hex_encode(buffer, (const char *)cfg->ykcore_config.uid, UID_SIZE);
 			writer(buffer, strlen(buffer), userdata);
 		}
 		writer("\n", 1, userdata);
@@ -864,9 +893,9 @@ int ykp_write_config(const YKP_CONFIG *cfg,
 		writer(str_hex_prefix,
 		       strlen(str_hex_prefix),
 		       userdata);
-		yubikey_hex_encode(buffer, (char *)cfg->ykcore_config.key, KEY_SIZE);
+		yubikey_hex_encode(buffer, (const char *)cfg->ykcore_config.key, KEY_SIZE);
 		if (key_bits_in_uid) {
-			yubikey_hex_encode(buffer + KEY_SIZE * 2, (char *)cfg->ykcore_config.uid, 4);
+			yubikey_hex_encode(buffer + KEY_SIZE * 2, (const char *)cfg->ykcore_config.uid, 4);
 		}
 		writer(buffer, strlen(buffer), userdata);
 		writer("\n", 1, userdata);
@@ -879,7 +908,7 @@ int ykp_write_config(const YKP_CONFIG *cfg,
 		writer(str_hex_prefix,
 		       strlen(str_hex_prefix),
 		       userdata);
-		yubikey_hex_encode(buffer, (char *)cfg->ykcore_config.accCode, ACC_CODE_SIZE);
+		yubikey_hex_encode(buffer, (const char*)cfg->ykcore_config.accCode, ACC_CODE_SIZE);
 		writer(buffer, strlen(buffer), userdata);
 		writer("\n", 1, userdata);
 
@@ -1007,7 +1036,7 @@ int ykp_config_num(YKP_CONFIG *cfg)
 	return 0;
 }
 
-int * const _ykp_errno_location(void)
+int * _ykp_errno_location(void)
 {
 	static int tsd_init = 0;
 	static int nothread_errno = 0;

@@ -41,6 +41,7 @@
 #include <ykpers.h>
 #include <yubikey.h> /* To get yubikey_modhex_encode and yubikey_hex_encode */
 #include <ykdef.h>
+#include "ykpers-args.h"
 
 #define YUBICO_OATH_VENDOR_ID_HEX	0xe1	/* UB as hex */
 #define YUBICO_HOTP_EVENT_TOKEN_TYPE	0x63	/* HE as hex */
@@ -155,7 +156,7 @@ static const YK_CONFIG default_config1 = {
         0,                      /* extFlags */
         TKTFLAG_APPEND_CR,      /* tktFlags */
         0,                      /* cfgFlags */
-        0,                      /* ctrOffs */
+	{0},                    /* ctrOffs */
         0                       /* crc */
 };
 
@@ -169,7 +170,7 @@ static const YK_CONFIG default_config2 = {
         TKTFLAG_APPEND_CR,      /* tktFlags */
         /* cfgFlags */
         CFGFLAG_STATIC_TICKET | CFGFLAG_STRONG_PW1 | CFGFLAG_STRONG_PW2 | CFGFLAG_MAN_UPDATE,
-        0,                      /* ctrOffs */
+	{0},                    /* ctrOffs */
         0                       /* crc */
 };
 
@@ -182,9 +183,14 @@ static const YK_CONFIG default_update = {
         EXTFLAG_ALLOW_UPDATE,   /* extFlags */
         TKTFLAG_APPEND_CR,      /* tktFlags */
         0,                      /* cfgFlags */
-        0,                      /* ctrOffs */
+	{0},                    /* ctrOffs */
         0                       /* crc */
 };
+
+static int _set_fixed(char *opt, YKP_CONFIG *cfg);
+static int _format_decimal_as_hex(uint8_t *dst, size_t dst_len, uint8_t *src);
+static int _format_oath_id(uint8_t *dst, size_t dst_len, uint8_t vendor, uint8_t type, uint32_t mui);
+static int _set_oath_id(char *opt, YKP_CONFIG *cfg, struct config_st *ycfg, YK_KEY *yk, YK_STATUS *st);
 
 static int hex_modhex_decode(unsigned char *result, size_t *resultlen,
 			     const char *str, size_t strl,
@@ -225,7 +231,7 @@ static int hex_modhex_decode(unsigned char *result, size_t *resultlen,
 	return 0;
 }
 
-void report_yk_error()
+void report_yk_error(void)
 {
 	if (ykp_errno)
 		fprintf(stderr, "Yubikey personalization error: %s\n",
@@ -265,10 +271,11 @@ int args_to_config(int argc, char **argv, YKP_CONFIG *cfg, YK_KEY *yk,
 	bool swap_seen = false;
 	bool update_seen = false;
 	bool ndef_seen = false;
+	struct config_st *ycfg;
 
 	ykp_configure_version(cfg, st);
 
-	struct config_st *ycfg = (struct config_st *) ykp_core_config(cfg);
+	ycfg = (struct config_st *) ykp_core_config(cfg);
 
 	while((c = getopt(argc, argv, optstring)) != -1) {
 		if (c == 'o') {
@@ -324,6 +331,7 @@ int args_to_config(int argc, char **argv, YKP_CONFIG *cfg, YK_KEY *yk,
 			break;
 		case '1':
 		case '2': {
+				int command;
 				if (slot_chosen) {
 					fprintf(stderr, "You may only choose slot (-1 / -2) once.\n");
 					*exit_code = 1;
@@ -344,7 +352,6 @@ int args_to_config(int argc, char **argv, YKP_CONFIG *cfg, YK_KEY *yk,
 					*exit_code = 1;
 					return 0;
 				}
-				int command;
 				if (update_seen) {
 					memcpy(ycfg, &default_update, sizeof(default_update));
 					if(c == '1') {
@@ -433,7 +440,7 @@ int args_to_config(int argc, char **argv, YKP_CONFIG *cfg, YK_KEY *yk,
 			if (!ykp_configure_command(cfg, SLOT_NDEF)) {
 				return 0;
 			}
-			memcpy(ndef, optarg, strnlen(optarg, 128));
+			memcpy(ndef, optarg, strlen(optarg));
 			ndef_seen = true;
 			break;
 		case 'o':
@@ -675,8 +682,8 @@ int args_to_config(int argc, char **argv, YKP_CONFIG *cfg, YK_KEY *yk,
 	return 1;
 }
 
-int _set_fixed(char *optarg, YKP_CONFIG *cfg) {
-	const char *fixed = optarg;
+static int _set_fixed(char *opt, YKP_CONFIG *cfg) {
+	const char *fixed = opt;
 	size_t fixedlen = strlen (fixed);
 	unsigned char fixedbin[256];
 	size_t fixedbinlen = 0;
@@ -692,7 +699,7 @@ int _set_fixed(char *optarg, YKP_CONFIG *cfg) {
 
 
 /* re-format decimal 12345678 into 'hex' 0x12 0x34 0x56 0x78 */
-int _format_decimal_as_hex(uint8_t *dst, size_t dst_len, uint8_t *src)
+static int _format_decimal_as_hex(uint8_t *dst, size_t dst_len, uint8_t *src)
 {
 	uint8_t *end;
 
@@ -709,7 +716,7 @@ int _format_decimal_as_hex(uint8_t *dst, size_t dst_len, uint8_t *src)
 }
 
 /* For details, see YubiKey Manual 2010-09-16 section 5.3.4 - OATH-HOTP Token Identifier */
-int _format_oath_id(uint8_t *dst, size_t dst_len, uint8_t vendor, uint8_t type, uint32_t mui)
+static int _format_oath_id(uint8_t *dst, size_t dst_len, uint8_t vendor, uint8_t type, uint32_t mui)
 {
 	uint8_t buf[8 + 1];
 
@@ -732,7 +739,7 @@ int _format_oath_id(uint8_t *dst, size_t dst_len, uint8_t vendor, uint8_t type, 
 	return 1;
 }
 
-int _set_oath_id(char *optarg, YKP_CONFIG *cfg, struct config_st *ycfg, YK_KEY *yk, YK_STATUS *st) {
+static int _set_oath_id(char *opt, YKP_CONFIG *cfg, struct config_st *ycfg, YK_KEY *yk, YK_STATUS *st) {
 	/* For details, see YubiKey Manual 2010-09-16 section 5.3.4 - OATH-HOTP Token Identifier */
 	if (!(ycfg->tktFlags & TKTFLAG_OATH_HOTP) == TKTFLAG_OATH_HOTP) {
 		fprintf(stderr,
@@ -745,10 +752,10 @@ int _set_oath_id(char *optarg, YKP_CONFIG *cfg, struct config_st *ycfg, YK_KEY *
 	if (! ykp_set_extflag_SERIAL_API_VISIBLE(cfg, true))
 		return 0;
 
-	if (strlen(optarg) > 7) {
-		if (_set_fixed(optarg + 8, cfg) != 1) {
+	if (strlen(opt) > 7) {
+		if (_set_fixed(opt + 8, cfg) != 1) {
 			fprintf(stderr,
-				"Invalid OATH token identifier %s supplied with oath-id=.\n", optarg + 8
+				"Invalid OATH token identifier %s supplied with oath-id=.\n", opt + 8
 				);
 			return 0;
 		}

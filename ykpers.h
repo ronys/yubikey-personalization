@@ -66,9 +66,12 @@ int ykp_AES_key_from_passphrase(YKP_CONFIG *cfg, const char *passphrase,
 				const char *salt);
 int ykp_HMAC_key_from_hex(YKP_CONFIG *cfg, const char *hexkey);
 
-/* Functions for constructing the YKNDEF struct before writing it to a neo */
-int ykp_construct_ndef_uri(YKNDEF *ndef, const char *uri);
-int ykp_construct_ndef_text(YKNDEF *ndef, const char *text, const char *lang, bool isutf16);
+/* Functions for constructing the YK_NDEF struct before writing it to a neo */
+YK_NDEF *ykp_alloc_ndef(void);
+int ykp_free_ndef(YK_NDEF *ndef);
+int ykp_construct_ndef_uri(YK_NDEF *ndef, const char *uri);
+int ykp_construct_ndef_text(YK_NDEF *ndef, const char *text, const char *lang, bool isutf16);
+int ykp_set_ndef_access_code(YK_NDEF *ndef, unsigned char *access_code);
 
 int ykp_set_access_code(YKP_CONFIG *cfg, unsigned char *access_code, size_t len);
 int ykp_set_fixed(YKP_CONFIG *cfg, unsigned char *fixed, size_t len);
@@ -126,7 +129,7 @@ YK_CONFIG *ykp_core_config(YKP_CONFIG *cfg);
 int ykp_command(YKP_CONFIG *cfg);
 int ykp_config_num(YKP_CONFIG *cfg);
 
-extern int * const _ykp_errno_location(void);
+extern int * _ykp_errno_location(void);
 #define ykp_errno (*_ykp_errno_location())
 const char *ykp_strerror(int errnum);
 
